@@ -2,8 +2,10 @@ name: Collect & Analyze fuel data
 
 on:
   schedule:
-    # 00h, 06h, 12h, 18h heure française = heures UTC directes
-    - cron: "0 0,6,12,18 * * *"
+    # 00h, 06h, 12h, 18h heure de Paris
+    # Paris = UTC+1 (hiver) / UTC+2 (été)
+    # On couvre les deux variantes, le job vérifie l'heure Paris réelle
+    - cron: "0 4,5,10,11,16,17,22,23 * * *"
   workflow_dispatch: # manual trigger
 
 permissions:
@@ -11,42 +13,69 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  TZ: Europe/Paris
+
 jobs:
   collect-and-analyze:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check Paris time (skip if not 0h/6h/12h/18h)
+        if: github.event_name == 'schedule'
+        run: |
+          PARIS_HOUR=$(date +%H)
+          echo "Heure Paris: ${PARIS_HOUR}h"
+          if [[ "$PARIS_HOUR" != "00" && "$PARIS_HOUR" != "06" && "$PARIS_HOUR" != "12" && "$PARIS_HOUR" != "18" ]]; then
+            echo "Pas une heure cible, skip."
+            echo "SKIP=true" >> $GITHUB_ENV
+          fi
+
       - name: Checkout repository
+        if: env.SKIP != 'true'
         uses: actions/checkout@v4
 
       - name: Setup Go
+        if: env.SKIP != 'true'
         uses: actions/setup-go@v5
         with:
           go-version: "1.22"
 
       - name: Setup Python
+        if: env.SKIP != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install Python dependencies
+        if: env.SKIP != 'true'
         run: pip install -r requirements.txt
 
       - name: Collect data from API
+        if: env.SKIP != 'true'
         run: go run carburants_collector.go
 
       - name: Copy snapshot to raw/
+        if: env.SKIP != 'true'
         run: |
           mkdir -p raw
-          STAMP=$(python3 -c "import json,datetime;d=json.load(open('data/stations_latest.json'));dt=datetime.datetime.fromisoformat(d['meta']['date_collecte']);print(dt.strftime('%Y-%m-%d_%Hh%M'))")
+          STAMP=$(python3 -c "
+          import json, datetime, zoneinfo
+          d = json.load(open('data/stations_latest.json'))
+          dt = datetime.datetime.fromisoformat(d['meta']['date_collecte'])
+          paris = dt.astimezone(zoneinfo.ZoneInfo('Europe/Paris'))
+          print(paris.strftime('%Y-%m-%d_%Hh%M'))
+          ")
           TARGET="raw/stations_${STAMP}.json"
           cp data/stations_latest.json "$TARGET"
           echo "Copied to $TARGET"
 
       - name: Run analysis
+        if: env.SKIP != 'true'
         run: python analyze_trends.py
 
       - name: Commit and push
+        if: env.SKIP != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -60,6 +89,7 @@ jobs:
           fi
 
       - name: Prepare GitHub Pages
+        if: env.SKIP != 'true'
         run: |
           mkdir -p _site
           LATEST=$(ls -t reports/rapport_*.html | head -1)
@@ -67,7 +97,9 @@ jobs:
           echo "Publishing $LATEST as index.html"
 
       - name: Upload Pages artifact
+        if: env.SKIP != 'true'
         uses: actions/upload-pages-artifact@v3
 
       - name: Deploy to GitHub Pages
+        if: env.SKIP != 'true'
         uses: actions/deploy-pages@v4

@@ -19,7 +19,7 @@ $(VENV)/bin/activate: requirements.txt
 collect: ## Collecter un snapshot depuis l'API gouv.fr et copier dans raw/
 	go run carburants_collector.go
 	@mkdir -p $(RAW_DIR)
-	@STAMP=$$(python3 -c "import json,datetime;d=json.load(open('$(DATA_DIR)/stations_latest.json'));dt=datetime.datetime.fromisoformat(d['meta']['date_collecte']);print(dt.strftime('%Y-%m-%d_%Hh%M'))"); \
+	@STAMP=$$(python3 -c "import json,datetime,zoneinfo;d=json.load(open('$(DATA_DIR)/stations_latest.json'));dt=datetime.datetime.fromisoformat(d['meta']['date_collecte']).astimezone(zoneinfo.ZoneInfo('Europe/Paris'));print(dt.strftime('%Y-%m-%d_%Hh%M'))"); \
 	TARGET=$(RAW_DIR)/stations_$$STAMP.json; \
 	if [ -f "$$TARGET" ]; then \
 		printf "$$TARGET existe deja. Ecraser ? [o/N] "; \
