@@ -2,9 +2,8 @@ name: Collect & Analyze fuel data
 
 on:
   schedule:
-    # 00h, 06h, 12h, 18h heure française (UTC+2 été / UTC+1 hiver)
-    # Cron en UTC : 22h, 04h, 10h, 16h
-    - cron: "0 4,10,16,22 * * *"
+    # 00h, 06h, 12h, 18h heure française = heures UTC directes
+    - cron: "0 0,6,12,18 * * *"
   workflow_dispatch: # manual trigger
 
 permissions:
