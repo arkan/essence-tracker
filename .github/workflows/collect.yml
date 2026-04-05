@@ -1,0 +1,74 @@
+name: Collect & Analyze fuel data
+
+on:
+  schedule:
+    # 00h, 06h, 12h, 18h heure française (UTC+2 été / UTC+1 hiver)
+    # Cron en UTC : 22h, 04h, 10h, 16h
+    - cron: "0 4,10,16,22 * * *"
+  workflow_dispatch: # manual trigger
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  collect-and-analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Collect data from API
+        run: go run carburants_collector.go
+
+      - name: Copy snapshot to raw/
+        run: |
+          mkdir -p raw
+          STAMP=$(python3 -c "import json,datetime;d=json.load(open('data/stations_latest.json'));dt=datetime.datetime.fromisoformat(d['meta']['date_collecte']);print(dt.strftime('%Y-%m-%d_%Hh%M'))")
+          TARGET="raw/stations_${STAMP}.json"
+          cp data/stations_latest.json "$TARGET"
+          echo "Copied to $TARGET"
+
+      - name: Run analysis
+        run: python analyze_trends.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add raw/ reports/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            STAMP=$(ls -t raw/stations_*.json | head -1 | sed 's/.*stations_//;s/\.json//')
+            git commit -m "data: collecte ${STAMP}"
+            git push
+          fi
+
+      - name: Prepare GitHub Pages
+        run: |
+          mkdir -p _site
+          LATEST=$(ls -t reports/rapport_*.html | head -1)
+          cp "$LATEST" _site/index.html
+          echo "Publishing $LATEST as index.html"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
