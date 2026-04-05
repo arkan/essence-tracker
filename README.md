@@ -10,7 +10,7 @@ essence-tracking/
 ├── analyze_trends.py         # Analyseur Python — tendances et rapports
 ├── requirements.txt          # Dependances Python
 ├── Makefile                  # Commandes raccourcies
-├── raw/                      # Snapshots quotidiens (stations_YYYY-MM-DD.json)
+├── raw/                      # Snapshots horodates (stations_YYYY-MM-DD_HHhMM.json)
 ├── data/                     # Exports bruts du collecteur (horodates)
 └── reports/                  # Rapports HTML generes
 ```
@@ -37,7 +37,7 @@ Cela cree un environnement virtuel Python et installe les dependances.
 make collect
 ```
 
-Recupere un snapshot depuis l'API gouv.fr et le copie automatiquement dans `raw/stations_YYYY-MM-DD.json`. Si un fichier existe deja pour la date du jour, une confirmation est demandee avant d'ecraser.
+Recupere un snapshot depuis l'API gouv.fr et le copie automatiquement dans `raw/stations_YYYY-MM-DD_HHhMM.json`. Si un fichier existe deja pour le meme horodatage, une confirmation est demandee avant d'ecraser. Plusieurs collectes par jour sont possibles.
 
 ### 2. Analyser les tendances
 
@@ -47,7 +47,7 @@ make analyze
 
 Produit :
 - Un **rapport console** avec la situation actuelle, les tendances J-1 / 7j / 30j, le detail par carburant et par region
-- Un **rapport HTML interactif** dans `reports/rapport_YYYY-MM-DD.html` avec des graphiques Plotly
+- Un **rapport HTML interactif** dans `reports/rapport_YYYY-MM-DD_HHhMM.html` avec des graphiques Plotly
 
 ### 3. Tout en une commande
 
@@ -71,15 +71,15 @@ Equivalent a : collect → analyze.
   ...
 ```
 
-### HTML (`reports/rapport_YYYY-MM-DD.html`)
+### HTML (`reports/rapport_YYYY-MM-DD_HHhMM.html`)
 
 - KPI globaux avec tendances
 - Evolution des ruptures temporaires (courbe + moyennes glissantes 7j/30j)
 - Ruptures par carburant (absolu et %)
 - Top 15 regions (barres horizontales)
-- Heatmap regions x jours
+- Heatmap regions x snapshots
 - Evolution des prix moyens
-- Tableau detaille jour par jour
+- Tableau detaille par snapshot
 
 Les graphiques sont interactifs (zoom, hover, export PNG). Necessite une connexion internet pour charger Plotly depuis le CDN.
 

@@ -2,7 +2,7 @@
 """
 Fuel shortage trend analysis for French gas stations.
 
-Reads daily JSON snapshots from raw/ directory (stations_YYYY-MM-DD.json)
+Reads JSON snapshots from raw/ directory (stations_YYYY-MM-DD_HHhMM.json)
 and produces:
   - Console summary with day-over-day, 7-day, and 30-day trends
   - HTML report with interactive Plotly charts (requires internet for CDN)
@@ -44,7 +44,9 @@ FUEL_COLORS = {
 RAW_DIR = Path(__file__).parent / "raw"
 REPORTS_DIR = Path(__file__).parent / "reports"
 
-FILENAME_RE = re.compile(r"^stations_(\d{4}-\d{2}-\d{2})\.json$")
+FILENAME_RE = re.compile(r"^stations_(\d{4}-\d{2}-\d{2}_\d{2}h\d{2})\.json$")
+DATETIME_FMT = "%Y-%m-%d_%Hh%M"
+DATETIME_DISPLAY = "%Y-%m-%d %H:%M"
 
 
 # ---------------------------------------------------------------------------
@@ -52,22 +54,22 @@ FILENAME_RE = re.compile(r"^stations_(\d{4}-\d{2}-\d{2})\.json$")
 # ---------------------------------------------------------------------------
 
 
-def discover_snapshots(raw_dir: Path) -> list[tuple[str, Path]]:
-    """Return sorted list of (date_str, filepath) from raw/ directory."""
+def discover_snapshots(raw_dir: Path) -> list[tuple[datetime, Path]]:
+    """Return sorted list of (datetime, filepath) from raw/ directory."""
     snapshots = []
     for f in raw_dir.iterdir():
         m = FILENAME_RE.match(f.name)
         if m and f.is_file():
             try:
-                datetime.strptime(m.group(1), "%Y-%m-%d")
+                dt = datetime.strptime(m.group(1), DATETIME_FMT)
             except ValueError:
                 continue
-            snapshots.append((m.group(1), f))
+            snapshots.append((dt, f))
     snapshots.sort(key=lambda x: x[0])
     return snapshots
 
 
-def compute_metrics(date_str: str, stations: list[dict]) -> dict:
+def compute_metrics(dt: datetime, stations: list[dict]) -> dict:
     """Compute all metrics for a single snapshot."""
     total = len(stations)
 
@@ -125,7 +127,7 @@ def compute_metrics(date_str: str, stations: list[dict]) -> dict:
         dept_data[dept]["rupture_temp_pct"] = (r / t * 100) if t > 0 else 0
 
     return {
-        "date": date_str,
+        "datetime": dt,
         "total_stations": total,
         "rupture_temp_stations": temp_rupture_stations,
         "rupture_temp_pct": (temp_rupture_stations / total * 100) if total > 0 else 0,
@@ -139,11 +141,11 @@ def load_all_snapshots(raw_dir: Path) -> list[dict]:
     """Load and compute metrics for all snapshots in raw/."""
     snapshots = discover_snapshots(raw_dir)
     if not snapshots:
-        print(f"ERROR: No stations_YYYY-MM-DD.json files found in {raw_dir}")
+        print(f"ERROR: No stations_YYYY-MM-DD_HHhMM.json files found in {raw_dir}")
         sys.exit(1)
 
     all_metrics = []
-    for date_str, filepath in snapshots:
+    for dt, filepath in snapshots:
         print(f"  Loading {filepath.name}...", end=" ", flush=True)
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -152,7 +154,7 @@ def load_all_snapshots(raw_dir: Path) -> list[dict]:
             print(f"ERROR: Failed to parse {filepath.name}: {e}")
             sys.exit(1)
         stations = data.get("stations", [])
-        metrics = compute_metrics(date_str, stations)
+        metrics = compute_metrics(dt, stations)
         all_metrics.append(metrics)
         print(f"{metrics['total_stations']} stations, {metrics['rupture_temp_stations']} ruptures temp.")
 
@@ -167,11 +169,11 @@ def load_all_snapshots(raw_dir: Path) -> list[dict]:
 def build_dataframes(all_metrics: list[dict]) -> dict[str, pd.DataFrame]:
     """Build pandas DataFrames from metrics for trend analysis."""
 
-    # --- Global daily ---
+    # --- Global (one row per snapshot) ---
     global_rows = []
     for m in all_metrics:
         row = {
-            "date": pd.Timestamp(m["date"]),
+            "datetime": pd.Timestamp(m["datetime"]),
             "total_stations": m["total_stations"],
             "rupture_temp": m["rupture_temp_stations"],
             "rupture_temp_pct": m["rupture_temp_pct"],
@@ -184,7 +186,7 @@ def build_dataframes(all_metrics: list[dict]) -> dict[str, pd.DataFrame]:
             row[f"{fuel}_offers"] = m["fuel"][fuel]["offers"]
         global_rows.append(row)
 
-    df_global = pd.DataFrame(global_rows).set_index("date").sort_index()
+    df_global = pd.DataFrame(global_rows).set_index("datetime").sort_index()
 
     # Add rolling averages
     for col in ["rupture_temp", "rupture_temp_pct"] + [f"{f}_temp" for f in FUEL_TYPES] + [f"{f}_pct" for f in FUEL_TYPES]:
@@ -193,12 +195,12 @@ def build_dataframes(all_metrics: list[dict]) -> dict[str, pd.DataFrame]:
         if len(df_global) >= 30:
             df_global[f"{col}_ma30"] = df_global[col].rolling(30, min_periods=1).mean()
 
-    # --- Region daily ---
+    # --- Region per snapshot ---
     region_rows = []
     for m in all_metrics:
         for region, rdata in m["region"].items():
             region_rows.append({
-                "date": pd.Timestamp(m["date"]),
+                "datetime": pd.Timestamp(m["datetime"]),
                 "region": region,
                 "total": rdata["total"],
                 "rupture_temp": rdata["rupture_temp"],
@@ -206,12 +208,12 @@ def build_dataframes(all_metrics: list[dict]) -> dict[str, pd.DataFrame]:
             })
     df_region = pd.DataFrame(region_rows)
 
-    # --- Department daily ---
+    # --- Department per snapshot ---
     dept_rows = []
     for m in all_metrics:
         for dept, ddata in m["dept"].items():
             dept_rows.append({
-                "date": pd.Timestamp(m["date"]),
+                "datetime": pd.Timestamp(m["datetime"]),
                 "dept": dept,
                 "total": ddata["total"],
                 "rupture_temp": ddata["rupture_temp"],
@@ -268,9 +270,9 @@ def print_console_report(dfs: dict[str, pd.DataFrame]):
     df_region = dfs["region"]
 
     latest = df.iloc[-1]
-    date_latest = df.index[-1].strftime("%Y-%m-%d")
-    date_first = df.index[0].strftime("%Y-%m-%d")
-    n_days = len(df)
+    dt_latest = df.index[-1].strftime(DATETIME_DISPLAY)
+    dt_first = df.index[0].strftime(DATETIME_DISPLAY)
+    n_snapshots = len(df)
 
     d1 = compute_delta(df["rupture_temp"], 1)
     d7 = compute_delta(df["rupture_temp"], 7)
@@ -284,8 +286,8 @@ def print_console_report(dfs: dict[str, pd.DataFrame]):
     print("=" * 65)
     print("  RAPPORT PENURIE CARBURANT — FRANCE")
     print("=" * 65)
-    print(f"  Periode : {date_first} -> {date_latest} ({n_days} jours)")
-    print(f"  Dernier snapshot : {date_latest}")
+    print(f"  Periode : {dt_first} -> {dt_latest} ({n_snapshots} snapshots)")
+    print(f"  Dernier snapshot : {dt_latest}")
     print()
 
     # --- Current situation ---
@@ -355,8 +357,8 @@ def print_console_report(dfs: dict[str, pd.DataFrame]):
     print("  TOP 10 REGIONS (dernier snapshot)")
     print("-" * 65)
 
-    latest_date = df.index[-1]
-    region_latest = df_region[df_region["date"] == latest_date].copy()
+    latest_dt = df.index[-1]
+    region_latest = df_region[df_region["datetime"] == latest_dt].copy()
     region_latest = region_latest.sort_values("rupture_temp", ascending=False).head(10)
 
     region_header = f"  {'Region':<30} {'Ruptures':>10} {'%':>7} {'/ Total':>10}"
@@ -410,14 +412,15 @@ def print_console_report(dfs: dict[str, pd.DataFrame]):
 
 
 def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
-    """Generate self-contained HTML report with Plotly charts."""
+    """Generate HTML report with Plotly charts."""
     df = dfs["global"]
     df_region = dfs["region"]
 
-    dates = df.index.strftime("%Y-%m-%d").tolist()
+    timestamps = df.index.strftime(DATETIME_DISPLAY).tolist()
     latest = df.iloc[-1]
-    date_latest = df.index[-1].strftime("%Y-%m-%d")
-    n_days = len(df)
+    dt_latest = df.index[-1].strftime(DATETIME_DISPLAY)
+    dt_latest_file = df.index[-1].strftime(DATETIME_FMT)
+    n_snapshots = len(df)
 
     d1 = compute_delta(df["rupture_temp"], 1)
     d7 = compute_delta(df["rupture_temp"], 7)
@@ -426,20 +429,20 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
     # ---- Chart 1: Global evolution ----
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(
-        x=dates, y=df["rupture_temp"].tolist(),
+        x=timestamps, y=df["rupture_temp"].tolist(),
         mode="lines+markers", name="Ruptures temporaires",
         line=dict(color="#d62728", width=3),
         marker=dict(size=6),
     ))
     if "rupture_temp_ma7" in df.columns:
         fig1.add_trace(go.Scatter(
-            x=dates, y=df["rupture_temp_ma7"].tolist(),
+            x=timestamps, y=df["rupture_temp_ma7"].tolist(),
             mode="lines", name="Moyenne 7j",
             line=dict(color="#ff7f0e", width=2, dash="dash"),
         ))
     if "rupture_temp_ma30" in df.columns:
         fig1.add_trace(go.Scatter(
-            x=dates, y=df["rupture_temp_ma30"].tolist(),
+            x=timestamps, y=df["rupture_temp_ma30"].tolist(),
             mode="lines", name="Moyenne 30j",
             line=dict(color="#1f77b4", width=2, dash="dot"),
         ))
@@ -453,7 +456,7 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
     fig2 = go.Figure()
     for fuel in FUEL_TYPES:
         fig2.add_trace(go.Scatter(
-            x=dates, y=df[f"{fuel}_temp"].tolist(),
+            x=timestamps, y=df[f"{fuel}_temp"].tolist(),
             mode="lines+markers", name=FUEL_LABELS[fuel],
             line=dict(color=FUEL_COLORS[fuel], width=2),
             marker=dict(size=4),
@@ -468,7 +471,7 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
     fig3 = go.Figure()
     for fuel in FUEL_TYPES:
         fig3.add_trace(go.Scatter(
-            x=dates, y=df[f"{fuel}_pct"].tolist(),
+            x=timestamps, y=df[f"{fuel}_pct"].tolist(),
             mode="lines+markers", name=FUEL_LABELS[fuel],
             line=dict(color=FUEL_COLORS[fuel], width=2),
             marker=dict(size=4),
@@ -480,8 +483,8 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
     )
 
     # ---- Chart 4: Top 15 regions bar chart (latest) ----
-    latest_date = df.index[-1]
-    region_latest = df_region[df_region["date"] == latest_date].copy()
+    latest_dt = df.index[-1]
+    region_latest = df_region[df_region["datetime"] == latest_dt].copy()
     region_latest = region_latest.sort_values("rupture_temp", ascending=True).tail(15)
 
     fig4 = go.Figure()
@@ -494,7 +497,7 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
         textposition="outside",
     ))
     fig4.update_layout(
-        title=f"Top 15 regions — Ruptures temporaires ({date_latest})",
+        title=f"Top 15 regions — Ruptures temporaires ({dt_latest})",
         xaxis_title="Nombre de stations", yaxis_title="",
         template="plotly_white", height=500,
         margin=dict(l=200),
@@ -502,27 +505,27 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
 
     # ---- Chart 5: Region heatmap evolution ----
     fig5_html = ""
-    if n_days > 1:
+    if n_snapshots > 1:
         top_regions = (
-            df_region[df_region["date"] == latest_date]
+            df_region[df_region["datetime"] == latest_dt]
             .sort_values("rupture_temp", ascending=False)
             .head(12)["region"]
             .tolist()
         )
         heatmap_data = df_region[df_region["region"].isin(top_regions)].pivot_table(
-            index="region", columns="date", values="rupture_temp_pct", aggfunc="first"
+            index="region", columns="datetime", values="rupture_temp_pct", aggfunc="first"
         )
         heatmap_data = heatmap_data.reindex(top_regions)
 
         fig5 = go.Figure(data=go.Heatmap(
             z=heatmap_data.values.tolist(),
-            x=[d.strftime("%Y-%m-%d") for d in heatmap_data.columns],
+            x=[d.strftime(DATETIME_DISPLAY) for d in heatmap_data.columns],
             y=heatmap_data.index.tolist(),
             colorscale="YlOrRd",
             colorbar_title="% rupture",
         ))
         fig5.update_layout(
-            title="Heatmap — % ruptures temporaires par region et jour",
+            title="Heatmap — % ruptures temporaires par region et snapshot",
             template="plotly_white", height=450,
         )
         fig5_html = fig5.to_html(full_html=False, include_plotlyjs=False)
@@ -533,7 +536,7 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
         prices = df[f"{fuel}_price"].tolist()
         if any(p is not None and not pd.isna(p) for p in prices):
             fig6.add_trace(go.Scatter(
-                x=dates, y=prices,
+                x=timestamps, y=prices,
                 mode="lines+markers", name=FUEL_LABELS[fuel],
                 line=dict(color=FUEL_COLORS[fuel], width=2),
                 marker=dict(size=4),
@@ -546,7 +549,7 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
 
     # ---- Data table ----
     table_rows = ""
-    for i, (date, row) in enumerate(df.iterrows()):
+    for i, (dt, row) in enumerate(df.iterrows()):
         bg = "#f9f9f9" if i % 2 == 0 else "#ffffff"
         fuels_cells = ""
         for fuel in FUEL_TYPES:
@@ -554,7 +557,7 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
             pct = row[f"{fuel}_pct"]
             fuels_cells += f"<td>{val:.0f} ({pct:.1f}%)</td>"
         table_rows += f"""<tr style="background:{bg}">
-            <td>{date.strftime('%Y-%m-%d')}</td>
+            <td>{dt.strftime(DATETIME_DISPLAY)}</td>
             <td>{row['total_stations']:.0f}</td>
             <td><strong>{row['rupture_temp']:.0f}</strong></td>
             <td>{row['rupture_temp_pct']:.1f}%</td>
@@ -575,7 +578,7 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rapport Penurie Carburant — {date_latest}</title>
+    <title>Rapport Penurie Carburant — {dt_latest}</title>
     <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -600,7 +603,7 @@ def generate_html_report(dfs: dict[str, pd.DataFrame], output_path: Path):
 <body>
 <div class="container">
     <h1>Rapport Penurie Carburant</h1>
-    <p class="subtitle">Periode : {df.index[0].strftime('%Y-%m-%d')} &rarr; {date_latest} &mdash; {n_days} jour(s) de donnees</p>
+    <p class="subtitle">Periode : {df.index[0].strftime(DATETIME_DISPLAY)} &rarr; {dt_latest} &mdash; {n_snapshots} snapshot(s)</p>
 
     <!-- KPI Cards -->
     <div class="kpi-grid">
@@ -711,8 +714,8 @@ def main():
     print(f"\n[3/4] Console report:")
     print_console_report(dfs)
 
-    date_latest = dfs["global"].index[-1].strftime("%Y-%m-%d")
-    output_html = REPORTS_DIR / f"rapport_{date_latest}.html"
+    dt_latest_file = dfs["global"].index[-1].strftime(DATETIME_FMT)
+    output_html = REPORTS_DIR / f"rapport_{dt_latest_file}.html"
 
     print(f"\n[4/4] Generating HTML report...")
     generate_html_report(dfs, output_html)
