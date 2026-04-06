@@ -21,16 +21,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check Paris time (skip if not 0h/6h/12h/18h)
-        if: github.event_name == 'schedule'
-        run: |
-          PARIS_HOUR=$(date +%H)
-          echo "Heure Paris: ${PARIS_HOUR}h"
-          if [[ "$PARIS_HOUR" != "00" && "$PARIS_HOUR" != "06" && "$PARIS_HOUR" != "12" && "$PARIS_HOUR" != "18" ]]; then
-            echo "Pas une heure cible, skip."
-            echo "SKIP=true" >> $GITHUB_ENV
-          fi
-
       - name: Checkout repository
         if: env.SKIP != 'true'
         uses: actions/checkout@v4
