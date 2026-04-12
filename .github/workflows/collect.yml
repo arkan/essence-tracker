@@ -5,7 +5,7 @@ on:
     # 00h, 06h, 12h, 18h heure de Paris
     # Paris = UTC+1 (hiver) / UTC+2 (été)
     # On couvre les deux variantes, le job vérifie l'heure Paris réelle
-    - cron: "0 4,5,10,11,16,17,22,23 * * *"
+    - cron: "0 5,11,17,23 * * *"
   workflow_dispatch: # manual trigger
 
 permissions:
